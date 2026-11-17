@@ -41,6 +41,7 @@ import { readClaudeTranscript } from "./transcript";
 import { readCodexTranscript } from "./transcript-codex";
 import { readDcodeTranscript } from "./transcript-dcode";
 import { readDshEvents, type DshSessionEvent } from "./transcript-dsh";
+import { jcodeHome, readJcodeSessionMeta, readJcodeTranscript } from "./transcript-jcode";
 import { readPiTranscript } from "./transcript-pi";
 import { zstdDecompressFrames } from "./zstd-frames";
 import type { TransportTurn } from "./chat";
@@ -459,6 +460,40 @@ const SQLITE_HISTORY =
   "keeps session history in an internal SQLite database, whose schema is unversioned and would " +
   "break on any upstream change";
 
+/**
+ * jcode: one `session_<name>_<epoch>_<hex>.json` snapshot per session, flat under
+ * `${JCODE_HOME:-~/.jcode}/sessions`, each with an optional `.journal.jsonl` beside it.
+ *
+ * Attribution is the `working_dir` recorded INSIDE the session (the newest journal entry's, when
+ * there is a journal, since a session can change directory). There is no cheap header to read it
+ * from, so every snapshot is parsed; that is one file per session, the same scale as Prime Agent's
+ * flat layout. `is_debug` sessions are jcode's own test and diagnostic runs and are skipped.
+ */
+function jcodeHistory(repoDir: string, home: string): HistoryImport {
+  const root = join(jcodeHome(home), "sessions");
+  if (!existsSync(root)) return { supported: true, sessions: [] };
+  const sessions: ChatSession[] = [];
+  let unattributed = 0;
+  for (const name of listDir(root)) {
+    if (!name.startsWith("session_") || !name.endsWith(".json")) continue;
+    const file = join(root, name);
+    try {
+      const meta = readJcodeSessionMeta(file);
+      if (!meta.readable || meta.isDebug) continue;
+      if (!meta.workingDir) {
+        unattributed++;
+        continue;
+      }
+      if (!withinRepo(meta.workingDir, repoDir)) continue;
+      const s = toSession(name.slice(0, -".json".length), readJcodeTranscript(file));
+      if (s) sessions.push(s);
+    } catch {
+      /* a single unreadable session must not abort the import */
+    }
+  }
+  return { supported: true, sessions, unattributed };
+}
+
 /** Read a harness's past sessions for one repo. Never throws. */
 export function importLocalHistory(
   harness: string,
@@ -486,6 +521,8 @@ export function importLocalHistory(
       return piHistory(repoDir, home);
     case "prime-agent":
       return primeAgentHistory(repoDir, home);
+    case "jcode":
+      return jcodeHistory(repoDir, home);
     case "opencode":
     // opencode v2 keeps sessions in the SAME `opencode.db` v1 does.
     case "opencode2":

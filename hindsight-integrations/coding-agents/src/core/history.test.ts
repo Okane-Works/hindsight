@@ -41,6 +41,30 @@ const piMessage = (role: string, text: string) =>
 const piLog = (id: string, cwd: string | undefined, ...turns: string[]) =>
   `${[piHeader(id, cwd), ...turns].join("\n")}\n`;
 
+/** A stored jcode session: a snapshot, and optionally the journal that has not been folded in. */
+function writeJcodeSession(
+  root: string,
+  id: string,
+  top: Record<string, unknown>,
+  texts: [string, string][],
+  journal?: Record<string, unknown>[]
+): void {
+  const dir = join(root, "sessions");
+  mkdirSync(dir, { recursive: true });
+  const messages = texts.map(([role, text], i) => ({
+    id: `${id}_m${i}`,
+    role,
+    content: [{ type: "text", text }],
+  }));
+  writeFileSync(join(dir, `${id}.json`), JSON.stringify({ id, ...top, messages }));
+  if (journal) {
+    writeFileSync(
+      join(dir, `${id}.journal.jsonl`),
+      journal.map((l) => JSON.stringify(l)).join("\n") + "\n"
+    );
+  }
+}
+
 /** Write a stored session where each host actually keeps it: pi under an encoded per-cwd folder,
  *  Prime Agent flat. */
 function writePiSession(home: string, cwd: string, id: string, ...turns: string[]): void {
@@ -495,5 +519,118 @@ describe("importLocalHistory — dcode", () => {
       throw new Error("must not be called — there is no transcripts dir to attribute");
     });
     expect(r).toEqual({ supported: true, sessions: [] });
+  });
+});
+
+describe("importLocalHistory — jcode", () => {
+  const REPO = "/work/acme";
+
+  beforeEach(() => {
+    vi.stubEnv("JCODE_HOME", "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const jcodeRoot = (h: string) => join(h, ".jcode");
+  const ids = (r: ReturnType<typeof importLocalHistory>) => r.sessions.map((s) => s.id).sort();
+
+  it("imports sessions recorded in the repo or a subdirectory, keyed by the file stem", () => {
+    const h = newHome();
+    writeJcodeSession(jcodeRoot(h), "session_a_1_aa", { working_dir: REPO }, [
+      ["user", "root question"],
+      ["assistant", "root answer"],
+    ]);
+    writeJcodeSession(jcodeRoot(h), "session_b_2_bb", { working_dir: `${REPO}/packages/api` }, [
+      ["user", "nested question"],
+    ]);
+    const r = importLocalHistory("jcode", REPO, h);
+    expect(r.supported).toBe(true);
+    expect(ids(r)).toEqual(["session_a_1_aa", "session_b_2_bb"]);
+    expect(r.sessions.find((s) => s.id === "session_a_1_aa")!.turns).toEqual([
+      { role: "user", text: "root question" },
+      { role: "assistant", text: "root answer" },
+    ]);
+  });
+
+  it("does not pull in a SIBLING repo whose path merely shares the prefix", () => {
+    const h = newHome();
+    writeJcodeSession(jcodeRoot(h), "session_a_1_aa", { working_dir: `${REPO}-other` }, [
+      ["user", "sibling repo work"],
+    ]);
+    writeJcodeSession(jcodeRoot(h), "session_b_2_bb", { working_dir: "/work" }, [
+      ["user", "parent directory work"],
+    ]);
+    expect(importLocalHistory("jcode", REPO, h).sessions).toEqual([]);
+  });
+
+  it("counts a session that records no working directory rather than guessing", () => {
+    const h = newHome();
+    writeJcodeSession(jcodeRoot(h), "session_a_1_aa", {}, [["user", "orphan"]]);
+    const r = importLocalHistory("jcode", REPO, h);
+    expect(r.sessions).toEqual([]);
+    expect(r.unattributed).toBe(1);
+  });
+
+  it("skips jcode's own debug sessions", () => {
+    const h = newHome();
+    writeJcodeSession(jcodeRoot(h), "session_a_1_aa", { working_dir: REPO, is_debug: true }, [
+      ["user", "diagnostic run"],
+    ]);
+    const r = importLocalHistory("jcode", REPO, h);
+    expect(r.sessions).toEqual([]);
+    expect(r.unattributed).toBe(0);
+  });
+
+  it("reads the journal: its messages, and the directory the session moved to", () => {
+    const h = newHome();
+    // Started elsewhere, now working in the repo, with most of the talk not yet checkpointed.
+    writeJcodeSession(
+      jcodeRoot(h),
+      "session_a_1_aa",
+      { working_dir: "/somewhere/else" },
+      [["user", "first"]],
+      [
+        {
+          meta: { working_dir: REPO },
+          append_messages: [
+            { id: "j1", role: "assistant", content: [{ type: "text", text: "second" }] },
+          ],
+        },
+      ]
+    );
+    const r = importLocalHistory("jcode", REPO, h);
+    expect(r.sessions).toHaveLength(1);
+    expect(r.sessions[0].turns.map((t) => t.text)).toEqual(["first", "second"]);
+  });
+
+  it("honours JCODE_HOME", () => {
+    const h = newHome();
+    const custom = join(h, "elsewhere");
+    writeJcodeSession(custom, "session_a_1_aa", { working_dir: REPO }, [["user", "custom home"]]);
+    writeJcodeSession(jcodeRoot(h), "session_b_2_bb", { working_dir: REPO }, [
+      ["user", "default home"],
+    ]);
+    vi.stubEnv("JCODE_HOME", custom);
+    expect(ids(importLocalHistory("jcode", REPO, h))).toEqual(["session_a_1_aa"]);
+  });
+
+  it("is not aborted by stray files in the sessions directory", () => {
+    const h = newHome();
+    const dir = join(jcodeRoot(h), "sessions");
+    writeJcodeSession(jcodeRoot(h), "session_a_1_aa", { working_dir: REPO }, [["user", "kept"]]);
+    writeFileSync(join(dir, "session_torn_3_cc.json"), "{not json");
+    writeFileSync(join(dir, "session_list_4_dd.json"), "[]");
+    writeFileSync(join(dir, "session_a_1_aa.bak"), "{not json");
+    writeFileSync(join(dir, "notes.txt"), "hello");
+    mkdirSync(join(dir, "session_dir_5_ee.json"));
+    const r = importLocalHistory("jcode", REPO, h);
+    expect(ids(r)).toEqual(["session_a_1_aa"]);
+    // A file that is not a session at all is not a session we failed to attribute.
+    expect(r.unattributed).toBe(0);
+  });
+
+  it("reports nothing to import when jcode was never used on this machine", () => {
+    expect(importLocalHistory("jcode", REPO, newHome())).toEqual({ supported: true, sessions: [] });
   });
 });
