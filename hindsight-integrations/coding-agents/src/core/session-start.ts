@@ -154,6 +154,11 @@ export interface SessionStartHookSpec {
   /** The host drops SessionStart context (Grok Build, #5467): stash it for the session's first tool
    *  hook instead — see HookSpec.toolHook. */
   deferContextToToolHook?: boolean;
+  /** The host discards SessionStart output but its prompt hook can inject (jcode): stash the
+   *  context for the session's next prompt hook, which prepends it to its own context once. */
+  deferContextToPromptHook?: boolean;
+  /** Event source; defaults to the stdin JSON. See HookSpec.readEvent. */
+  readEvent?(): Record<string, unknown> | null;
   /** Optional per-repo host registration, run once memory is confirmed LIVE for the repo (after
    *  bank derivation and the opt-in/`disabled` gates). Returns an optional user-facing banner
    *  hint (registration maintenance is host business, its absence a host problem) and must never
@@ -426,7 +431,7 @@ export async function runSessionStartHook(
   // throw here happens during session bootstrap, before the agent has done anything — more
   // disruptive than a failure mid-prompt — so nothing in this function may ever escape it.
   try {
-    const ev = readHookEvent(spec.harness);
+    const ev = spec.readEvent ? spec.readEvent() : readHookEvent(spec.harness);
     if (!ev) return;
     if (spec.accept && !spec.accept(ev)) return;
     const { harness } = spec;
@@ -476,7 +481,11 @@ export async function runSessionStartHook(
     if (out.deferInitialReflect && sessionId) {
       writeSessionCache(sessionCacheFile(harness, sessionId), { deferInitialReflect: true });
     }
-    if (spec.deferContextToToolHook && out.additionalContext && sessionId) {
+    if (
+      (spec.deferContextToToolHook || spec.deferContextToPromptHook) &&
+      out.additionalContext &&
+      sessionId
+    ) {
       stashPendingContext(harness, sessionId, out.additionalContext);
       out.additionalContext = undefined;
     }

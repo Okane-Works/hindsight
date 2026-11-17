@@ -84,6 +84,9 @@ export interface HookSpec {
     accept(event: Record<string, unknown>): boolean;
     emit(context: string): unknown;
   };
+  /** Where this hook's event comes from. Defaults to the stdin JSON (`readHookEvent`). Hosts that
+   *  hand some hooks no stdin (jcode's detached observers) supply their own source. */
+  readEvent?(): Record<string, unknown> | null;
 }
 
 /** Minimal client shape `buildHookOutput` needs — `HindsightClient` satisfies it structurally. */
@@ -429,7 +432,7 @@ export async function runHook(
   // Anti-recursion: the codebase survey's own headless session sets this so its hooks are a no-op.
   if (process.env.HINDSIGHT_DISABLE_HOOKS) return;
 
-  const ev = readHookEvent(spec.harness);
+  const ev = spec.readEvent ? spec.readEvent() : readHookEvent(spec.harness);
   if (!ev) return;
   if (spec.accept && !spec.accept(ev)) return;
   const { prompt: rawPrompt, cwd: rawCwd, sessionId } = spec.parse(ev);
@@ -502,6 +505,13 @@ export async function runHook(
     startBackgroundSeed(cwd, { limit: cfg.seedLimit, harness: spec.harness });
   }
   let context = output.context;
+  // A SessionStart that could not reach the model (deferContextToPromptHook) stashed its context
+  // for this session. Deliver it once, ahead of this turn's own context. Hosts with a toolHook
+  // drain the stash there instead, so only touch it when there is none.
+  if (!spec.toolHook && sessionId) {
+    const pending = takePendingContext(spec.harness, sessionId);
+    if (pending) context = context ? `${pending}\n\n${context}` : pending;
+  }
   if (context && spec.toolHook && sessionId) {
     stashPendingContext(spec.harness, sessionId, context);
     context = undefined;
