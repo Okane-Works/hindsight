@@ -103,6 +103,10 @@ beforeEach(() => {
   vi.stubEnv("HINDSIGHT_CONFIG", "");
   vi.stubEnv("DSH_HOME", "");
   delete process.env.DSH_HOME;
+  // JCODE_HOME leaks exactly like DSH_HOME: the jcode installer writes config.toml and mcp.json
+  // under it, and this suite is routinely run from inside a jcode session that exports it.
+  vi.stubEnv("JCODE_HOME", "");
+  delete process.env.JCODE_HOME;
 });
 
 afterEach(() => {
@@ -117,6 +121,10 @@ afterEach(() => {
 describe("env isolation", () => {
   it("unsets DSH_HOME, so no test can write a real dsh home patch", () => {
     expect(process.env.DSH_HOME).toBeUndefined();
+  });
+
+  it("unsets JCODE_HOME, so no test can edit a real jcode config", () => {
+    expect(process.env.JCODE_HOME).toBeUndefined();
   });
 });
 
@@ -355,6 +363,297 @@ describe("kimi-code installer", () => {
       }
     }
   );
+});
+
+describe("jcode installer", () => {
+  const configPath = (ctx: InstallCtx) => join(ctx.home, ".jcode", "config.toml");
+  const mcpPath = (ctx: InstallCtx) => join(ctx.home, ".jcode", "mcp.json");
+  const spec = HOOK_HARNESSES.jcode;
+  /** Every hook the spec declares, as [event, command] — never literals, so a spec change that the
+   *  runtime honours cannot silently skip the installer. */
+  const expected = (ctx: InstallCtx): [string, string][] =>
+    [...Object.values(spec.install), ...(spec.additionalHooks ?? [])].map((h) => [
+      h.event,
+      `node "${join(ctx.dist, h.entry)}"`,
+    ]);
+  /** Parsed as real TOML, so a malformed edit fails here rather than in the user's jcode. */
+  const hooksOf = (ctx: InstallCtx) =>
+    (parseToml(readFileSync(configPath(ctx), "utf8")).hooks ?? {}) as Record<string, unknown>;
+  const seed = (ctx: InstallCtx, toml: string) => {
+    mkdirSync(dirname(configPath(ctx)), { recursive: true });
+    writeFileSync(configPath(ctx), toml);
+  };
+  const logged = (ctx: InstallCtx): string[] => {
+    const lines: string[] = [];
+    ctx.log = (m) => lines.push(m);
+    return lines;
+  };
+
+  it("creates a [hooks] table on a fresh home, with every hook the spec declares", () => {
+    const ctx = makeCtx();
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    const hooks = hooksOf(ctx);
+    for (const [event, command] of expected(ctx)) expect(hooks[event]).toEqual([command]);
+    expect(Object.keys(hooks).sort()).toEqual(
+      ["session_end", "session_start", "turn_end", "user_prompt_submit"]
+        .concat("user_prompt_submit_timeout_ms")
+        .sort()
+    );
+    // jcode reads the prompt budget in milliseconds; the spec declares seconds.
+    expect(hooks.user_prompt_submit_timeout_ms).toBe(spec.install.prompt.timeout! * 1000);
+    expect(hooks.user_prompt_submit_timeout_ms).toBe(30_000);
+  });
+
+  it("inserts into an existing [hooks] table instead of appending a second one", () => {
+    // A second `[hooks]` header is a TOML error that takes the WHOLE config down, which is why the
+    // block cannot simply be appended at the end of the file the way Kimi's is.
+    const ctx = makeCtx();
+    seed(
+      ctx,
+      [
+        'model = "some-model"',
+        "",
+        "[hooks] # my hooks",
+        "pre_tool_transform_timeout_ms = 500",
+        "post_tool_feedback_timeout_ms = 10000",
+        "",
+        "[display]",
+        'theme = "dark"',
+        "",
+      ].join("\n")
+    );
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    const text = readFileSync(configPath(ctx), "utf8");
+    expect(text.match(/^\s*\[hooks\]/gm)).toHaveLength(1);
+    const parsed = parseToml(text) as Record<string, any>;
+    expect(parsed.model).toBe("some-model");
+    expect(parsed.display).toEqual({ theme: "dark" });
+    expect(parsed.hooks.pre_tool_transform_timeout_ms).toBe(500);
+    expect(parsed.hooks.post_tool_feedback_timeout_ms).toBe(10000);
+    for (const [event, command] of expected(ctx)) expect(parsed.hooks[event]).toEqual([command]);
+    // The user's lines are byte-for-byte where they were.
+    expect(text).toContain("[hooks] # my hooks\n# HINDSIGHT_CODING_AGENTS_JCODE_START\n");
+    expect(text).toContain(
+      "# HINDSIGHT_CODING_AGENTS_JCODE_END\npre_tool_transform_timeout_ms = 500\n"
+    );
+  });
+
+  it("keeps a user's own hook and runs ours alongside it", () => {
+    const ctx = makeCtx();
+    seed(
+      ctx,
+      '[hooks]\nturn_end = "~/bin/notify"\nsession_start = [\'a b\', "c"]\n' +
+        "user_prompt_submit_timeout_ms = 45000\n"
+    );
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    const hooks = hooksOf(ctx);
+    expect(hooks.turn_end).toEqual([
+      "~/bin/notify",
+      `node "${join(ctx.dist, spec.install.stop.entry)}"`,
+    ]);
+    expect(hooks.session_start).toEqual([
+      "a b",
+      "c",
+      `node "${join(ctx.dist, spec.install.sessionStart.entry)}"`,
+    ]);
+    // A budget the user chose is theirs.
+    expect(hooks.user_prompt_submit_timeout_ms).toBe(45000);
+  });
+
+  it("is idempotent, and repairs a dist path that moved", () => {
+    const ctx = makeCtx();
+    seed(ctx, '[hooks]\nturn_end = "~/bin/notify"\n');
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    const once = readFileSync(configPath(ctx), "utf8");
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    expect(readFileSync(configPath(ctx), "utf8")).toBe(once);
+    for (const entry of ["jcode-hook.js", "jcode-sessionstart-hook.js"]) {
+      expect(once.split(entry)).toHaveLength(2);
+    }
+    // turn_end and session_end both run the stop entry: once each.
+    expect(once.split("jcode-stop-hook.js")).toHaveLength(3);
+
+    const moved = { ...ctx, dist: join("/opt", "elsewhere", MARKER, "dist") };
+    expect(run(["install", "jcode"], moved)).toBe(0);
+    const hooks = hooksOf(ctx);
+    expect(hooks.turn_end).toEqual([
+      "~/bin/notify",
+      `node "${join(moved.dist, spec.install.stop.entry)}"`,
+    ]);
+    expect(readFileSync(configPath(ctx), "utf8")).not.toContain(join(ctx.dist, "jcode-"));
+  });
+
+  it("backs the config up once, before its first edit", () => {
+    const ctx = makeCtx();
+    const original = '[hooks]\nturn_end = "~/bin/notify"\n';
+    seed(ctx, original);
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    expect(readFileSync(`${configPath(ctx)}.hindsight-backup`, "utf8")).toBe(original);
+  });
+
+  it.each([
+    ["a multi-line array", '[hooks]\nturn_end = [\n  "~/bin/notify",\n]\n'],
+    ["a config that is not valid TOML", '[hooks]\nturn_end = "unterminated\n'],
+    ["a hooks table spelled as a dotted key", 'hooks.turn_end = "~/bin/notify"\n'],
+  ])("refuses %s, writes nothing, and prints the lines to add", (_name, toml) => {
+    const ctx = makeCtx();
+    const lines = logged(ctx);
+    seed(ctx, toml);
+    expect(run(["install", "jcode"], ctx)).toBe(1);
+    expect(readFileSync(configPath(ctx), "utf8")).toBe(toml);
+    expect(existsSync(`${configPath(ctx)}.hindsight-backup`)).toBe(false);
+    // Nothing half-installed: no MCP entry without the hooks.
+    expect(existsSync(mcpPath(ctx))).toBe(false);
+    const out = lines.join("\n");
+    expect(out).toContain("left untouched");
+    for (const [event, command] of expected(ctx))
+      expect(out).toContain(`${event} = ['${command}']`);
+  });
+
+  it("writes forward slashes and a quoted path, since jcode runs the command without a shell", () => {
+    const ctx = { ...makeCtx(), dist: "C:\\Users\\me\\My Agents\\coding-agents\\dist" };
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    const text = readFileSync(configPath(ctx), "utf8");
+    expect(text).not.toContain("\\");
+    for (const command of Object.values(hooksOf(ctx)).flat()) {
+      if (typeof command === "string") expect(command).toMatch(/^node ".*jcode-[a-z-]*hook\.js"$/);
+    }
+  });
+
+  it("registers a per-session MCP server under `servers`, stamped jcode", () => {
+    const ctx = makeCtx();
+    writeJsonAt(mcpPath(ctx), {
+      servers: {
+        theirs: { command: "their-server", args: [], shared: true },
+        // What jcode's one-time Codex import leaves behind: our server, stamped for Codex.
+        hindsight: {
+          command: "node",
+          args: ["/old/.hindsight/coding-agents/dist/mcp-server.js"],
+          env: { HINDSIGHT_MCP_HARNESS: "codex" },
+          shared: true,
+        },
+      },
+    });
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    const mcp = readJson(mcpPath(ctx));
+    expect(mcp.mcpServers).toBeUndefined();
+    expect(mcp.servers.theirs).toEqual({ command: "their-server", args: [], shared: true });
+    expect(mcp.servers.hindsight).toEqual({
+      command: "node",
+      args: [join(ctx.dist, "mcp-server.js")],
+      env: { HINDSIGHT_MCP_HARNESS: "jcode" },
+      // Per-session, so the server starts in the session's directory and resolves the same bank
+      // the hooks do. A shared one inherits the daemon's directory.
+      shared: false,
+    });
+  });
+
+  it("keeps the `mcpServers` spelling of a file that already uses it", () => {
+    // jcode accepts it as an alias of `servers`; writing both would define the field twice.
+    const ctx = makeCtx();
+    writeJsonAt(mcpPath(ctx), { mcpServers: { theirs: { command: "x" } } });
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    const mcp = readJson(mcpPath(ctx));
+    expect(mcp.servers).toBeUndefined();
+    expect(Object.keys(mcp.mcpServers).sort()).toEqual(["hindsight", "theirs"]);
+  });
+
+  it("refuses to replace a user-managed MCP server named hindsight", () => {
+    const ctx = makeCtx();
+    const lines = logged(ctx);
+    const theirs = { servers: { hindsight: { command: "my-own-hindsight", args: [] } } };
+    writeJsonAt(mcpPath(ctx), theirs);
+    expect(run(["install", "jcode"], ctx)).toBe(1);
+    expect(readJson(mcpPath(ctx))).toEqual(theirs);
+    expect(existsSync(configPath(ctx))).toBe(false);
+    expect(lines.join("\n")).toContain("user-managed MCP server");
+  });
+
+  it("warns when Claude Code's config defines a hindsight MCP server jcode may prefer", () => {
+    const ctx = makeCtx();
+    const lines = logged(ctx);
+    writeJsonAt(join(ctx.home, ".claude.json"), {
+      mcpServers: {
+        hindsight: { command: "node", args: ["x"], env: { HINDSIGHT_MCP_HARNESS: "claude-code" } },
+      },
+    });
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    const out = lines.join("\n");
+    expect(out).toContain("warning");
+    expect(out).toContain(join(ctx.home, ".claude.json"));
+    expect(out).toContain("JCODE_DISABLE_CLAUDE_MCP=1");
+  });
+
+  it("does not warn without such an entry", () => {
+    const ctx = makeCtx();
+    const lines = logged(ctx);
+    writeJsonAt(join(ctx.home, ".claude.json"), { mcpServers: { other: { command: "x" } } });
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    expect(lines.join("\n")).not.toContain("warning");
+  });
+
+  it("honours JCODE_HOME for hooks, MCP and the skill alike", () => {
+    const staged = mkdtempSync(join(tmpdir(), "hs-pkg-jcodeskill-"));
+    homes.push(staged);
+    // Named like the real package directory, which is how an MCP entry is recognised as ours.
+    const pkgRoot = join(staged, MARKER);
+    mkdirSync(join(pkgRoot, "skill"), { recursive: true });
+    writeFileSync(join(pkgRoot, "skill", "SKILL.md"), "packaged skill body");
+    const ctx = { ...makeCtx(), pkgRoot, dist: join(pkgRoot, "dist") };
+    const custom = join(ctx.home, "custom-jcode");
+    vi.stubEnv("JCODE_HOME", custom);
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    expect(Object.keys(parseToml(readFileSync(join(custom, "config.toml"), "utf8")))).toEqual([
+      "hooks",
+    ]);
+    expect(readJson(join(custom, "mcp.json")).servers.hindsight.env.HINDSIGHT_MCP_HARNESS).toBe(
+      "jcode"
+    );
+    const skill = join(custom, "skills", "hindsight-coding-agent", "SKILL.md");
+    expect(readFileSync(skill, "utf8")).toBe("packaged skill body");
+    expect(existsSync(join(ctx.home, ".jcode"))).toBe(false);
+
+    expect(run(["uninstall", "jcode"], ctx)).toBe(0);
+    expect(existsSync(join(custom, "skills", "hindsight-coding-agent"))).toBe(false);
+    expect(readJson(join(custom, "mcp.json")).servers.hindsight).toBeUndefined();
+  });
+
+  it("uninstall restores the config a user had, merged hooks included", () => {
+    const ctx = makeCtx();
+    const original =
+      'model = "m"\n\n[hooks]\nturn_end = "~/bin/notify"\nsession_end = ["a", "b"]\n' +
+      'pre_tool_timeout_ms = 5000\n\n[display]\ntheme = "dark"\n';
+    seed(ctx, original);
+    writeJsonAt(mcpPath(ctx), { servers: { theirs: { command: "x" } } });
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    expect(run(["uninstall", "jcode"], ctx)).toBe(0);
+    // Byte for byte: a merged one-command array collapses back to the string it was.
+    expect(readFileSync(configPath(ctx), "utf8")).toBe(original);
+    expect(readJson(mcpPath(ctx))).toEqual({ servers: { theirs: { command: "x" } } });
+  });
+
+  it("uninstall keeps what a user added to a merged hook after the install", () => {
+    const ctx = makeCtx();
+    seed(ctx, '[hooks]\nturn_end = "~/bin/notify"\n');
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    const merged = readFileSync(configPath(ctx), "utf8");
+    writeFileSync(configPath(ctx), merged.replace("turn_end = [", "turn_end = ['~/bin/later', "));
+    expect(run(["uninstall", "jcode"], ctx)).toBe(0);
+    expect(hooksOf(ctx)).toEqual({ turn_end: ["~/bin/later", "~/bin/notify"] });
+    expect(readFileSync(configPath(ctx), "utf8")).not.toContain("HINDSIGHT");
+  });
+
+  it("uninstall leaves a user-managed hindsight MCP server alone", () => {
+    const ctx = makeCtx();
+    expect(run(["install", "jcode"], ctx)).toBe(0);
+    const theirs = { servers: { hindsight: { command: "my-own-hindsight", args: [] } } };
+    writeJsonAt(mcpPath(ctx), theirs);
+    expect(run(["uninstall", "jcode"], ctx)).toBe(0);
+    expect(readJson(mcpPath(ctx))).toEqual(theirs);
+    expect(readFileSync(configPath(ctx), "utf8")).not.toContain("HINDSIGHT_CODING_AGENTS_JCODE");
+    expect(readFileSync(configPath(ctx), "utf8")).not.toContain("jcode-stop-hook.js");
+  });
 });
 
 describe("qwen-code installer", () => {
@@ -2523,6 +2822,7 @@ describe("run() CLI behavior", () => {
       "traecode",
       "workbuddy",
       "codebuddy",
+      "jcode",
     ]);
   });
 });
