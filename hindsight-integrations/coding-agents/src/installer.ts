@@ -43,6 +43,7 @@ import { applyEdits, modify } from "jsonc-parser";
 import { parse as parseToml } from "smol-toml";
 import { HOOK_HARNESSES, type HookHarnessName } from "./harness/hook-lifecycle";
 import { importLocalHistory } from "./core/history";
+import { jcodeHome as resolveJcodeHome } from "./core/transcript-jcode";
 import { detectLlm, hasRustToolchain, hasUvx, type LlmChoice } from "./core/daemon";
 import { readLegacyEndpoint } from "./core/legacy";
 import { hookNode, hookNodeShell, isOurMcpEntry, nodeBinary } from "./core/util";
@@ -274,7 +275,7 @@ function mergeHarnessHooks(
   // A harness whose hooks live outside the two JSON shapes must never reach the generic
   // writer: the ternary below would silently take the FLAT branch and emit a JSON block
   // into a file that host never reads. tsc cannot catch that, so fail loudly here.
-  if (spec.configStyle === "toml-array")
+  if (spec.configStyle === "toml-array" || spec.configStyle === "toml-table")
     throw new Error(`${harness} writes its own TOML hook block; mergeHarnessHooks cannot emit it`);
 
   const installedEvents = new Set<string>();
@@ -1560,6 +1561,373 @@ const kimi: HarnessInstaller = {
   },
 };
 
+// ── jcode ───────────────────────────────────────────────────────────────────────
+
+const JCODE_MARKER_START = "# HINDSIGHT_CODING_AGENTS_JCODE_START";
+const JCODE_MARKER_END = "# HINDSIGHT_CODING_AGENTS_JCODE_END";
+/** Prefix of the comment that keeps a user's own hook line verbatim while ours is merged into it. */
+const JCODE_MARKER_ORIGINAL = "# HINDSIGHT_CODING_AGENTS_JCODE_ORIGINAL ";
+const JCODE_HOOKS_HEADER_RE = /^\s*\[hooks\]\s*(?:#.*)?$/;
+const JCODE_TABLE_HEADER_RE = /^\s*\[/;
+/** Our entry files, whatever directory they were installed from: a moved `dist` is still ours. */
+const JCODE_OURS_RE = /jcode-(?:sessionstart-|stop-)?hook\.js/;
+
+/**
+ * jcode home: `$JCODE_HOME`, else `~/.jcode`, the CLI's own resolution order. The transcript
+ * reader and the history importer resolve it the same way (core/transcript-jcode.ts); installing
+ * anywhere else would write hooks into a config.toml jcode never loads.
+ */
+const jcodeHome = (c: InstallCtx): string => resolveJcodeHome(c.home);
+
+/** One hook the installer wants registered: the `[hooks]` key and the command to run. */
+interface JcodeHookEntry {
+  event: string;
+  command: string;
+}
+
+/**
+ * jcode parses a hook command shell-style and executes it directly, with no shell, so the path is
+ * always quoted (a space would split it) and written with forward slashes: backslash is an escape
+ * character in that parser, which would eat a Windows path's separators.
+ */
+const jcodeCommand = (dist: string, entry: string): string =>
+  `node "${join(dist, entry).replaceAll("\\", "/")}"`;
+
+/** A TOML string. Literal (single-quoted) when possible, so the command's own quotes need no
+ *  escaping; a basic string otherwise (JSON's escapes are a subset of TOML's). */
+// eslint-disable-next-line no-control-regex
+const tomlString = (s: string): string =>
+  /['\u0000-\u001f\u007f]/.test(s) ? JSON.stringify(s) : `'${s}'`;
+const tomlArray = (items: string[]): string => `[${items.map(tomlString).join(", ")}]`;
+
+function jcodeHookEntries(dist: string): JcodeHookEntry[] {
+  const spec = HOOK_HARNESSES.jcode;
+  // From the lifecycle spec, so the installed hooks cannot diverge from the runtime entry points.
+  return [...Object.values(spec.install), ...(spec.additionalHooks ?? [])].map((h) => ({
+    event: h.event,
+    command: jcodeCommand(dist, h.entry),
+  }));
+}
+
+/** jcode's key for the prompt hook's budget, which it reads in milliseconds. */
+const jcodePromptTimeoutKey = (): string =>
+  `${HOOK_HARNESSES.jcode.install.prompt.event}_timeout_ms`;
+
+/** The commands of one `key = <value>` right-hand side, or null when the value is not a
+ *  single-line string or array of strings (a multi-line array, an inline table, …). */
+function jcodeParseCommands(rhs: string): string[] | null {
+  try {
+    const v = (parseToml(`v = ${rhs}`) as { v?: unknown }).v;
+    if (typeof v === "string") return [v];
+    if (Array.isArray(v) && v.every((x) => typeof x === "string")) return v as string[];
+  } catch {
+    /* not a complete single-line value */
+  }
+  return null;
+}
+
+interface JcodeTomlEdit {
+  text: string;
+  /** Hook keys whose existing value could not be read as a single-line string or array. */
+  unreadable: string[];
+}
+
+/**
+ * Remove everything this installer put in config.toml: the marker block, and our command from any
+ * user hook it was merged into. The user's line is restored verbatim from the comment the merge
+ * left above it, unless they have edited the merged value since, in which case their current
+ * commands are kept and only ours is dropped.
+ */
+function stripJcodeHooks(text: string): JcodeTomlEdit {
+  const out: string[] = [];
+  const unreadable: string[] = [];
+  let inBlock = false;
+  let inHooks = false;
+  let original: string | undefined;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === JCODE_MARKER_START) {
+      inBlock = true;
+      continue;
+    }
+    if (inBlock) {
+      if (trimmed === JCODE_MARKER_END) inBlock = false;
+      continue;
+    }
+    if (trimmed.startsWith(JCODE_MARKER_ORIGINAL)) {
+      original = line.slice(line.indexOf(JCODE_MARKER_ORIGINAL) + JCODE_MARKER_ORIGINAL.length);
+      continue;
+    }
+    const saved = original;
+    original = undefined;
+    if (JCODE_TABLE_HEADER_RE.test(line)) inHooks = JCODE_HOOKS_HEADER_RE.test(line);
+    const kv = inHooks ? /^(\s*)([A-Za-z0-9_-]+)(\s*=\s*)(.*)$/.exec(line) : null;
+    if (kv && JCODE_OURS_RE.test(kv[4])) {
+      const commands = jcodeParseCommands(kv[4]);
+      if (!commands) {
+        unreadable.push(kv[2]);
+        if (saved !== undefined) out.push(`${JCODE_MARKER_ORIGINAL}${saved}`);
+        out.push(line);
+        continue;
+      }
+      const theirs = commands.filter((cmd) => !JCODE_OURS_RE.test(cmd));
+      const savedKv = saved === undefined ? null : /^\s*([A-Za-z0-9_-]+)\s*=\s*(.*)$/.exec(saved);
+      const savedCommands = savedKv && savedKv[1] === kv[2] ? jcodeParseCommands(savedKv[2]) : null;
+      if (savedCommands && JSON.stringify(savedCommands) === JSON.stringify(theirs)) {
+        out.push(saved!);
+        continue;
+      }
+      if (!theirs.length) continue;
+      out.push(
+        `${kv[1]}${kv[2]}${kv[3]}${theirs.length === 1 ? tomlString(theirs[0]) : tomlArray(theirs)}`
+      );
+      continue;
+    }
+    // A marker with no merged line under it (the user rewrote or removed it) restores nothing.
+    out.push(line);
+  }
+  return { text: out.join("\n"), unreadable };
+}
+
+/**
+ * Register our hooks in jcode's config.toml text. Pure: text in, text out.
+ *
+ * jcode's hooks are KEYS of one `[hooks]` table, which is what makes this unlike Kimi's block:
+ *   - the block cannot go at the end of the file. A second `[hooks]` header is a TOML error that
+ *     takes the whole config down, so the block goes directly under the existing header, and a
+ *     new table is created only when there is none;
+ *   - a key may be defined once, so a hook the user already set is rewritten in place as an array
+ *     that keeps their commands and appends ours (jcode takes a string or an array for every hook
+ *     and runs observers independently). Their original line is kept in a comment directly above,
+ *     so uninstall can put it back exactly as it was.
+ */
+function mergeJcodeHooks(existing: string, entries: JcodeHookEntry[]): JcodeTomlEdit {
+  const stripped = stripJcodeHooks(existing);
+  const lines = stripped.text.split("\n");
+  const unreadable = [...stripped.unreadable];
+  const header = lines.findIndex((l) => JCODE_HOOKS_HEADER_RE.test(l));
+  /** Line index of `key = …` inside the user's `[hooks]` table, or -1. */
+  const keyLine = (key: string): number => {
+    if (header === -1) return -1;
+    const re = new RegExp(`^\\s*${key}\\s*=`);
+    for (let i = header + 1; i < lines.length && !JCODE_TABLE_HEADER_RE.test(lines[i]); i++)
+      if (re.test(lines[i])) return i;
+    return -1;
+  };
+
+  const block: string[] = [];
+  // Two lifecycle stages may share one command (session_end reuses the stop entry); a key is still
+  // written once.
+  const byEvent = new Map<string, string[]>();
+  for (const e of entries) byEvent.set(e.event, [...(byEvent.get(e.event) ?? []), e.command]);
+  for (const [event, commands] of byEvent) {
+    const at = keyLine(event);
+    if (at === -1) {
+      block.push(`${event} = ${tomlArray(commands)}`);
+      continue;
+    }
+    const kv = /^(\s*[A-Za-z0-9_-]+\s*=\s*)(.*)$/.exec(lines[at])!;
+    const theirs = jcodeParseCommands(kv[2]);
+    if (!theirs) {
+      unreadable.push(event);
+      continue;
+    }
+    lines.splice(
+      at,
+      1,
+      `${JCODE_MARKER_ORIGINAL}${lines[at]}`,
+      `${kv[1]}${tomlArray([...theirs, ...commands])}`
+    );
+  }
+  // The prompt hook is the only one jcode times out. A budget the user already set is theirs.
+  const timeoutKey = jcodePromptTimeoutKey();
+  if (keyLine(timeoutKey) === -1) {
+    block.push(`${timeoutKey} = ${HOOK_HARNESSES.jcode.install.prompt.timeout! * 1000}`);
+  }
+
+  const marked = block.length ? [JCODE_MARKER_START, ...block, JCODE_MARKER_END] : [];
+  if (header !== -1) {
+    lines.splice(header + 1, 0, ...marked);
+    return { text: lines.join("\n"), unreadable };
+  }
+  const base = stripped.text.replace(/\n*$/, "");
+  return {
+    text: `${base ? `${base}\n\n` : ""}${["[hooks]", ...marked].join("\n")}\n`,
+    unreadable,
+  };
+}
+
+/** A parsed config.toml with every key this installer owns removed, as comparable JSON. Used to
+ *  prove an edit changed nothing but our own hooks. */
+function jcodeForeignConfig(parsed: Record<string, unknown>, entries: JcodeHookEntry[]): string {
+  const clone = JSON.parse(
+    JSON.stringify(parsed, (_k, v) => (typeof v === "bigint" ? v.toString() : v))
+  ) as Record<string, any>;
+  if (isPlainObject(clone.hooks)) {
+    for (const { event } of entries) {
+      const v = clone.hooks[event];
+      const theirs = (Array.isArray(v) ? v : v === undefined ? [] : [v]).filter(
+        (cmd) => typeof cmd !== "string" || !JCODE_OURS_RE.test(cmd)
+      );
+      if (theirs.length) clone.hooks[event] = theirs;
+      else delete clone.hooks[event];
+    }
+    delete clone.hooks[jcodePromptTimeoutKey()];
+    if (!Object.keys(clone.hooks).length) delete clone.hooks;
+  }
+  return JSON.stringify(clone);
+}
+
+/**
+ * Why an edited config.toml must not be written, or undefined when it is safe. Text-level TOML
+ * editing is the fragile part of this installer, so nothing reaches disk unless the result parses,
+ * registers every one of our hooks, and differs from the original in our own keys only.
+ */
+function jcodeEditProblem(
+  before: string,
+  after: string,
+  entries: JcodeHookEntry[],
+  /** Install requires every hook to be registered afterwards; uninstall requires none of it. */
+  mode: "install" | "uninstall" = "install"
+): string | undefined {
+  let was: Record<string, unknown>;
+  try {
+    was = parseToml(before) as Record<string, unknown>;
+  } catch (e) {
+    return `it is not valid TOML as it stands (${(e as Error).message.split("\n")[0]})`;
+  }
+  let now: Record<string, unknown>;
+  try {
+    now = parseToml(after) as Record<string, unknown>;
+  } catch (e) {
+    return `the edit would not parse (${(e as Error).message.split("\n")[0]})`;
+  }
+  const hooks = isPlainObject(now.hooks) ? now.hooks : {};
+  for (const { event, command } of entries) {
+    const v = hooks[event];
+    const commands = Array.isArray(v) ? v : [v];
+    if (mode === "install" && !commands.includes(command))
+      return `hooks.${event} would not run the Hindsight hook`;
+    if (
+      mode === "uninstall" &&
+      commands.some((c) => typeof c === "string" && JCODE_OURS_RE.test(c))
+    )
+      return `hooks.${event} would still run the Hindsight hook`;
+  }
+  if (jcodeForeignConfig(was, entries) !== jcodeForeignConfig(now, entries))
+    return "the edit would change settings other than the Hindsight hooks";
+  return undefined;
+}
+
+/** jcode reads `servers`, and accepts Claude's `mcpServers` spelling as an alias for it. Keep
+ *  whichever the file already uses: writing both would define the same field twice. */
+const jcodeMcpKey = (mcp: Record<string, any>): "servers" | "mcpServers" =>
+  !isPlainObject(mcp.servers) && isPlainObject(mcp.mcpServers) ? "mcpServers" : "servers";
+
+/**
+ * Claude Code config files jcode also loads MCP servers from. jcode builds that let those entries
+ * override `mcp.json` run Claude's `hindsight` server instead of ours, so MCP retains are stamped
+ * `harness:claude-code`. Returns the files that define one for another harness.
+ */
+function claudeHindsightMcpFiles(c: InstallCtx): string[] {
+  return [join(c.home, ".claude.json"), join(c.home, ".claude", "mcp.json")].filter((path) => {
+    if (!existsSync(path)) return false;
+    const entry = readJson(path).mcpServers?.hindsight;
+    return isPlainObject(entry) && entry.env?.HINDSIGHT_MCP_HARNESS !== "jcode";
+  });
+}
+
+const jcode: HarnessInstaller = {
+  name: "jcode",
+  detect: (c) => onPath("jcode") || existsSync(jcodeHome(c)),
+  install(c) {
+    const path = join(jcodeHome(c), "config.toml");
+    const mcpPath = join(jcodeHome(c), "mcp.json");
+    const entries = jcodeHookEntries(c.dist);
+    const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
+    const edit = mergeJcodeHooks(existing, entries);
+    const problem = edit.unreadable.length
+      ? `hooks.${[...new Set(edit.unreadable)].join(", hooks.")} is not a single-line string or array`
+      : jcodeEditProblem(existing, edit.text, entries);
+    // Decide everything before writing anything: a half-installed harness (hooks but no MCP, or
+    // the reverse) is harder to reason about than one that refused cleanly.
+    const mcp = readJson(mcpPath);
+    const key = jcodeMcpKey(mcp);
+    const current = mcp[key]?.hindsight;
+    if (problem) {
+      c.log?.(`jcode: ${path} was left untouched: ${problem}.`);
+      c.log?.("jcode: add these keys to its [hooks] table by hand, then re-run the install:");
+      for (const { event, command } of entries) c.log?.(`  ${event} = ${tomlArray([command])}`);
+      c.log?.(
+        `  ${jcodePromptTimeoutKey()} = ${HOOK_HARNESSES.jcode.install.prompt.timeout! * 1000}`
+      );
+      return false;
+    }
+    if (current && !isOurMcpEntry(current)) {
+      c.log?.(
+        `jcode: ${mcpPath} already contains a user-managed MCP server named "hindsight". ` +
+          `Rename or remove it, then re-run the install.`
+      );
+      return false;
+    }
+
+    mkdirSync(dirname(path), { recursive: true });
+    backupOnce(path);
+    writeFileSync(path, edit.text.endsWith("\n") ? edit.text : `${edit.text}\n`);
+
+    // `shared: false` is load-bearing. A shared server is spawned once per jcode daemon, in the
+    // daemon's working directory, and mcp-server.js resolves its bank from process.cwd() at
+    // startup, so every session would get the bank of wherever the daemon happened to start. A
+    // non-shared server is spawned per session in that session's directory, which is the same
+    // directory the hooks run in. An entry we wrote earlier (including one jcode imported from
+    // Codex's config, stamped `codex`) is replaced.
+    mcp[key] = {
+      ...(mcp[key] ?? {}),
+      hindsight: { ...mcpServerEntry(c.dist, "jcode"), shared: false },
+    };
+    writeJson(mcpPath, mcp);
+    installSkill(c, "jcode");
+    c.log?.(`jcode: hooks merged into [hooks] in ${path}, MCP in ${mcpPath}`);
+    for (const file of claudeHindsightMcpFiles(c)) {
+      c.log?.(
+        `jcode: warning: ${file} also defines an MCP server named "hindsight". jcode versions ` +
+          `that let Claude Code's MCP config override ${mcpPath} will run that one, and stamp ` +
+          `MCP retains with its harness instead of jcode. Update jcode, or start it with ` +
+          `JCODE_DISABLE_CLAUDE_MCP=1.`
+      );
+    }
+  },
+  uninstall(c) {
+    const path = join(jcodeHome(c), "config.toml");
+    if (existsSync(path)) {
+      const existing = readFileSync(path, "utf8");
+      const cleaned = stripJcodeHooks(existing).text;
+      if (cleaned !== existing) {
+        // Same rule as install: never write a config.toml that stopped parsing.
+        const problem = jcodeEditProblem(existing, cleaned, jcodeHookEntries(c.dist), "uninstall");
+        if (problem) {
+          c.log?.(
+            `jcode: ${path} was left untouched: ${problem}. Remove the Hindsight hooks by hand.`
+          );
+          return false;
+        }
+        writeFileSync(path, cleaned);
+      }
+    }
+    const mcpPath = join(jcodeHome(c), "mcp.json");
+    if (existsSync(mcpPath)) {
+      const mcp = readJson(mcpPath);
+      const key = jcodeMcpKey(mcp);
+      if (isOurMcpEntry(mcp[key]?.hindsight)) {
+        delete mcp[key].hindsight;
+        writeJson(mcpPath, mcp);
+      }
+    }
+    uninstallSkill(c, "jcode");
+    c.log?.("jcode: hooks + MCP registration + skill removed");
+  },
+};
+
 const CLINE_HOOK_MARKER = "HINDSIGHT_CODING_AGENTS_CLINE";
 const CLINE_OLD_HOOK_EVENTS = ["TaskStart", "UserPromptSubmit", "TaskComplete"];
 const CLINE_PLUGIN_NAME = "@vectorize-io/hindsight-coding-agents";
@@ -2382,6 +2750,7 @@ export const INSTALLERS: HarnessInstaller[] = [
   traecode,
   workbuddy,
   codebuddy,
+  jcode,
 ];
 
 // The public executable was renamed from Gemini CLI to Antigravity's `agy`. Keep the
