@@ -81,6 +81,9 @@ export const HARNESS_NAMES = [
   // registration in CodeBuddy's priority-chained MCP file (see src/installer.ts). The CLI
   // writes WorkBuddy's transcript format; the CodeBuddy IDE has a reader of its own.
   "codebuddy",
+  // jcode is a HOOK host whose hooks are keys of the `[hooks]` table in ~/.jcode/config.toml; the
+  // installer merges into that table and registers MCP in ~/.jcode/mcp.json (see src/installer.ts).
+  "jcode",
 ];
 
 const HOOK_BINS: Record<string, string> = {
@@ -99,6 +102,7 @@ const HOOK_BINS: Record<string, string> = {
   "kimi-code": "hindsight-kimi-hook",
   workbuddy: "hindsight-workbuddy-hook",
   codebuddy: "hindsight-codebuddy-hook",
+  jcode: "hindsight-jcode-hook",
   // more hook harnesses: add a HookSpec entry point (see src/cursor-hook.ts) + a registration here.
 };
 
