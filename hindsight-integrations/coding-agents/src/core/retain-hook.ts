@@ -80,6 +80,8 @@ export interface RetainHookSpec {
     /** The assistant reply for this turn, from the Stop event. "" when the host sent none. */
     assistantText(event: Record<string, unknown>): string;
   };
+  /** Event source; defaults to the stdin JSON. See HookSpec.readEvent. */
+  readEvent?(): Record<string, unknown> | null;
 }
 
 /** Minimal client shape `buildRetain` needs — `HindsightClient` satisfies it structurally. The
@@ -188,7 +190,7 @@ export async function runRetainHook(
   // is synchronous. A margin keeps the kill from landing between our last wait and its response.
   const hostDeadline = Date.now() + spec.hostTimeoutSec * 1000 - HOST_DEADLINE_MARGIN_MS;
 
-  const ev = readHookEvent(spec.harness);
+  const ev = spec.readEvent ? spec.readEvent() : readHookEvent(spec.harness);
   if (!ev) return;
   if (spec.accept && !spec.accept(ev)) return;
   const parsed = spec.parse(ev);
