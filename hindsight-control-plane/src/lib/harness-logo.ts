@@ -124,6 +124,9 @@ export const HARNESS_LOGO_REGISTRY: Record<string, HarnessLogoEntry> = {
   traecode: { id: "traecode", label: "TraeCode", src: "/img/harness/traecode.png" },
   workbuddy: { id: "workbuddy", label: "WorkBuddy", src: "/img/harness/workbuddy.png" },
   codebuddy: { id: "codebuddy", label: "CodeBuddy", src: "/img/harness/codebuddy.png" },
+  // jcode's own brand mark (assets/brand/jcode-mark.svg in its MIT-licensed repository): a
+  // halftone torus drawn in near-black, so it is inverted on dark like the other monochrome marks.
+  jcode: { id: "jcode", label: "jcode", src: "/img/harness/jcode.svg", invertOnDark: true },
 };
 
 const HARNESS_TAG_PREFIX = "harness:";
