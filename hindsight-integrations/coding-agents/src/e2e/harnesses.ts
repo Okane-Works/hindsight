@@ -24,6 +24,7 @@ import type { HarnessDockerSetup } from "./harness";
 import { codexDockerSetup } from "./codex";
 import { dcodeDockerSetup } from "./dcode";
 import { factoryDroidDockerSetup } from "./droid";
+import { jcodeDockerSetup } from "./jcode";
 import { zcodeDockerSetup } from "./zcode";
 
 const home = (...parts: string[]) => join(homedir(), ...parts);
@@ -351,4 +352,5 @@ export const ALL_HARNESS_SETUPS: HarnessDockerSetup[] = [
   dshDockerSetup,
   factoryDroidDockerSetup,
   zcodeDockerSetup,
+  jcodeDockerSetup,
 ];

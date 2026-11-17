@@ -31,9 +31,10 @@ describe("HARNESS_NAMES", () => {
         "kimi-code",
         "workbuddy",
         "codebuddy",
+        "jcode",
       ])
     );
-    expect(HARNESS_NAMES).toHaveLength(22);
+    expect(HARNESS_NAMES).toHaveLength(23);
   });
 
   // Family guard: a new harness that lands without a Docker E2E setup is never driven through its
