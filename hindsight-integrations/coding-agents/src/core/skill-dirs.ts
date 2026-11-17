@@ -16,7 +16,7 @@
  * registers the packaged skill in memory instead (harness/opencode2.ts, #4352).
  */
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 export const SKILL_DIRS: Record<string, string[]> = {
   "claude-code": [".claude", "skills"],
@@ -50,6 +50,10 @@ export const SKILL_DIRS: Record<string, string[]> = {
   // CodeBuddy Code reads that SAME engine's default root, ~/.codebuddy — WorkBuddy only overrides
   // its home folder (product config `dataLayout.configDir.userDirName`), so the two differ by config.
   codebuddy: [".codebuddy", "skills"],
+  // jcode's own user-level skills root. It also reads ~/.claude/skills and ~/.agents/skills, but
+  // removal is by fixed directory name, so the copy goes where only jcode's uninstall touches it.
+  // `$JCODE_HOME` moves the whole root — see resolveSkillDirs.
+  jcode: [".jcode", "skills"],
 };
 
 /**
@@ -78,6 +82,12 @@ export const resolveSkillDirs = (harness: string, home: string): string[] | unde
   const parts = SKILL_DIRS[harness];
   if (harness === "traecode" && parts) {
     return [traecodeDotDirName(home), ...parts.slice(1)];
+  }
+  // jcode keeps everything under `$JCODE_HOME` when it is set, skills included. The parts stay
+  // home-relative (the contract both callers join against), so express the override as the
+  // relative path from home.
+  if (harness === "jcode" && parts && process.env.JCODE_HOME) {
+    return [...relative(home, process.env.JCODE_HOME).split(sep).filter(Boolean), "skills"];
   }
   return parts;
 };

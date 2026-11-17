@@ -19,6 +19,7 @@ import { readQwenTranscript } from "../core/transcript-qwen";
 import { readDroidTranscript } from "../core/transcript-droid";
 import { zcodeAssistantText } from "../core/transcript-zcode";
 import { kimiPromptText, kimiSessionDir, readKimiTranscript } from "../core/transcript-kimi";
+import { jcodeEvent, jcodeSessionPath, readJcodeTranscript } from "../core/transcript-jcode";
 import { readWorkbuddyTranscript } from "../core/transcript-workbuddy";
 import { readCodebuddyTranscript } from "../core/transcript-codebuddy-ide";
 
@@ -37,7 +38,8 @@ export type HookHarnessName =
   | "traecode"
   | "kimi-code"
   | "workbuddy"
-  | "codebuddy";
+  | "codebuddy"
+  | "jcode";
 export type HookLifecycle = "sessionStart" | "prompt" | "stop";
 /**
  * How the HOST spells one hook registration.
@@ -50,8 +52,11 @@ export type HookLifecycle = "sessionStart" | "prompt" | "stop";
  *   toml-array — Kimi Code's flat `[[hooks]]` array of tables, whose entry schema is strict
  *             (event/matcher/command/timeout); a fifth key drops EVERY hook in the file, so
  *             its installer writes the block itself. See the installer's kimi adapter.
+ *   toml-table — jcode's: every hook is a KEY of the one `[hooks]` table in config.toml
+ *             (`turn_end = ["cmd", …]`), so entries are merged into that table rather than
+ *             appended as a block. See the installer's jcode adapter.
  */
-export type HookConfigStyle = "nested" | "flat" | "process" | "toml-array";
+export type HookConfigStyle = "nested" | "flat" | "process" | "toml-array" | "toml-table";
 
 export interface HookInstallSpec {
   event: string;
@@ -794,6 +799,71 @@ export const HOOK_HARNESSES: Record<HookHarnessName, HookHarnessSpec> = {
     sessionStart: genieSessionStart("codebuddy"),
     prompt: geniePrompt("codebuddy"),
     retain: genieRetain("codebuddy", readCodebuddyTranscript),
+  },
+  /**
+   * jcode (https://github.com/1jehuang/jcode) registers hooks as keys of the `[hooks]` table in
+   * `${JCODE_HOME:-~/.jcode}/config.toml`. Two kinds matter here:
+   *
+   *   - OBSERVERS (`session_start`, `turn_end`, `session_end`) are spawned detached and their
+   *     output is discarded. Older builds hand them no stdin either, only a `JCODE_HOOK_PAYLOAD`
+   *     env mirror of the event; newer builds pipe the JSON event too. `jcodeEvent` reads stdin
+   *     first and falls back to the env payload, so one entry point serves both.
+   *   - `user_prompt_submit` is synchronous: the JSON event arrives on stdin and Claude's
+   *     `hookSpecificOutput.additionalContext` reply is appended to the conversation as a
+   *     `<system-reminder>`. A jcode without that hook ignores the unknown key and simply never
+   *     runs the prompt entry, which leaves a retain-only integration.
+   *
+   * SessionStart therefore cannot reach the model itself: its context is stashed for the session's
+   * next prompt hook (`deferContextToPromptHook`).
+   */
+  jcode: {
+    configStyle: "toml-table",
+    install: {
+      // Timeouts are declarative for the observers (jcode never kills a detached observer); only
+      // the prompt hook's is written, as `user_prompt_submit_timeout_ms`.
+      sessionStart: { event: "session_start", entry: "jcode-sessionstart-hook.js", timeout: 30 },
+      prompt: { event: "user_prompt_submit", entry: "jcode-hook.js", timeout: 30 },
+      stop: { event: "turn_end", entry: "jcode-stop-hook.js", timeout: 60 },
+    },
+    // Safety net for a turn whose task was dropped before `turn_end` fired. Idempotent through the
+    // retain cursor, like Factory Droid's cancellation hook.
+    additionalHooks: [{ event: "session_end", entry: "jcode-stop-hook.js", timeout: 60 }],
+    sessionStart: {
+      harness: "jcode",
+      readEvent: jcodeEvent,
+      // `attach` is a client reconnecting to a session that already started.
+      accept: (ev) => ev.source !== "attach",
+      parse: (ev) => ({
+        cwd: ev.cwd as string | undefined,
+        sessionId: ev.session_id as string | undefined,
+      }),
+      deferContextToPromptHook: true,
+      emit: () => ({}),
+    },
+    prompt: {
+      ...claudePrompt,
+      harness: "jcode",
+      readEvent: jcodeEvent,
+    },
+    retain: {
+      hostTimeoutSec: 60,
+      harness: "jcode",
+      readEvent: jcodeEvent,
+      accept: (ev) => ev.event === "turn_end" || ev.event === "session_end",
+      parse: (ev) => ({
+        sessionId: ev.session_id as string | undefined,
+        // Newer builds name the snapshot; otherwise resolve it from the id (the grok-build and
+        // kimi-code precedent). `last_assistant_text` is deliberately NOT mapped: it is truncated
+        // to 4000 characters, so buildRetain would append it as a second, shortened copy of a
+        // reply the transcript already holds in full by the time `turn_end` fires.
+        transcriptPath:
+          typeof ev.transcript_path === "string" && ev.transcript_path
+            ? ev.transcript_path
+            : jcodeSessionPath(ev.session_id),
+        cwd: ev.cwd as string | undefined,
+      }),
+      readTranscript: readJcodeTranscript,
+    },
   },
 };
 

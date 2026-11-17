@@ -67,6 +67,9 @@ export default defineConfig({
     "droid-hook": "src/droid-hook.ts",
     "droid-sessionstart-hook": "src/droid-sessionstart-hook.ts",
     "droid-stop-hook": "src/droid-stop-hook.ts",
+    "jcode-hook": "src/jcode-hook.ts",
+    "jcode-sessionstart-hook": "src/jcode-sessionstart-hook.ts",
+    "jcode-stop-hook": "src/jcode-stop-hook.ts",
     // Spawned DETACHED to start the local daemon — a cold start outlives every hook timeout.
     "daemon-start": "src/daemon-start.ts",
     // Spawned DETACHED to hold the codebase-survey lease for the survey agent's lifetime.

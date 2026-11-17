@@ -49,7 +49,10 @@
     "hindsight-droid-stop-hook": "dist/droid-stop-hook.js",
     "hindsight-kimi-hook": "dist/kimi-hook.js",
     "hindsight-kimi-sessionstart-hook": "dist/kimi-sessionstart-hook.js",
-    "hindsight-kimi-stop-hook": "dist/kimi-stop-hook.js"
+    "hindsight-kimi-stop-hook": "dist/kimi-stop-hook.js",
+    "hindsight-jcode-hook": "dist/jcode-hook.js",
+    "hindsight-jcode-sessionstart-hook": "dist/jcode-sessionstart-hook.js",
+    "hindsight-jcode-stop-hook": "dist/jcode-stop-hook.js"
   },
   "exports": {
     ".": {
