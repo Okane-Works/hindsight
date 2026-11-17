@@ -345,11 +345,11 @@ document it retains, so the control plane can show its logo instead of another
 - tag `harness:<id>` — the same value, so the documents list can filter on it
 
 The ids are defined by that integration's HookSpecs
-(`src/harness/hook-lifecycle.ts`, 15 harnesses) and persistent-plugin
+(`src/harness/hook-lifecycle.ts`, 16 harnesses) and persistent-plugin
 entrypoints (`src/harness/registry.ts`, 7 harnesses):
 currently `antigravity-cli`, `claude-code`, `cline-cli`, `codebuddy`, `codex`,
 `copilot-cli`, `cursor-cli`, `dcode`, `devin-cli`, `dsh`, `factory-droid`,
-`grok-build`, `kilo`, `kimi-code`, `opencode`, `opencode2`, `pi`,
+`grok-build`, `jcode`, `kilo`, `kimi-code`, `opencode`, `opencode2`, `pi`,
 `prime-agent`, `qwen-code`, `traecode`, `workbuddy`, `zcode`.
 
 The control plane resolves the value in

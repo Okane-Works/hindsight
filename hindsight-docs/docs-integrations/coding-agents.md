@@ -13,7 +13,7 @@ import CodingAgentsChart from '@site/src/components/CodingAgentsChart';
 
 Long-term project memory for **coding agents**, backed by [Hindsight](https://vectorize.io/hindsight).
 One package, several agents: a shared reflect-and-inject core with a thin entry point per agent
-(**Claude Code**, **Codex CLI**, **DeepAgents Dcode**, **opencode**, **opencode 2**, **Kilo CLI**, **Cursor CLI**, **GitHub Copilot CLI**, **Grok Build**, **Qwen Code**, **Kimi Code**, **Factory Droid**, **ZCode**, **TraeCode**, **Antigravity CLI**, **Devin CLI**, **Cline CLI**, **pi**, **Prime Agent**, **DeepSeek Harness**, **WorkBuddy**, **CodeBuddy**). Ingestion is fully
+(**Claude Code**, **Codex CLI**, **DeepAgents Dcode**, **opencode**, **opencode 2**, **Kilo CLI**, **Cursor CLI**, **GitHub Copilot CLI**, **Grok Build**, **Qwen Code**, **Kimi Code**, **Factory Droid**, **ZCode**, **TraeCode**, **Antigravity CLI**, **Devin CLI**, **Cline CLI**, **pi**, **Prime Agent**, **DeepSeek Harness**, **WorkBuddy**, **CodeBuddy**, **jcode**). Ingestion is fully
 automatic — there is no setup command: a repo's git history and conversations flow into its memory
 bank in the background as you work.
 
@@ -410,6 +410,37 @@ whose `index.json` _is_ the `transcript_path` and whose prose sits one level dow
 `messages/<messageId>.json` — so the reader dispatches on the shape it was handed
 (core/transcript-codebuddy-ide.ts).
 
+#### <img src="/img/harness/jcode.svg" alt="" width="20" height="20" /> jcode
+
+```bash
+npx @vectorize-io/hindsight-coding-agents install jcode
+```
+
+Hooks in the `[hooks]` table of `~/.jcode/config.toml`, the stdio MCP server under
+`servers.hindsight` in `~/.jcode/mcp.json`, and the companion skill in `~/.jcode/skills`.
+(All three go under `$JCODE_HOME` instead when it is set.)
+
+jcode's hooks are keys of one `[hooks]` table, so the installer edits that table in place rather
+than appending a block: a second `[hooks]` header would be a TOML error that breaks the whole
+config. A hook you already set, such as `turn_end = "~/bin/notify"`, is kept and ours runs
+alongside it, and `uninstall` puts your line back exactly as it was. The edited file is parsed
+before it is written; if it would not parse, or one of your hooks is written in a form the
+installer does not edit (a multi-line array), nothing is changed and the lines to add by hand are
+printed instead. The MCP server is registered with `shared: false`, so jcode starts it per
+session in that session's directory and the `hindsight_*` tools resolve the same bank the hooks
+do; the installer will not replace an MCP server named `hindsight` that it did not write.
+
+> Recall is injected by jcode's synchronous `user_prompt_submit` hook. `session_start`,
+> `turn_end` and `session_end` are detached observers whose output jcode discards, so the session
+> briefing is held back and delivered with the first prompt. A jcode release without
+> `user_prompt_submit` ignores that key: sessions are still seeded and retained, and nothing is
+> injected. Sessions are retained from the snapshot and its journal under `~/.jcode/sessions`,
+> swarm workers and other child sessions included, each as its own document.
+>
+> jcode also loads MCP servers from Claude Code's config. If `~/.claude.json` defines its own
+> `hindsight` server, some jcode versions run that one in place of the entry above and MCP writes
+> are stamped `claude-code`; the installer warns when it sees this.
+
 Uninstall the same way: `npx @vectorize-io/hindsight-coding-agents uninstall claude-code` (or `uninstall all`).
 
 **Devin CLI needs Node 22.5 or newer.** Its hooks pass only a session id — the conversation itself
@@ -481,7 +512,8 @@ transcripts are needed either way; going through them directly is simply the sho
 **How sessions are matched.** A conversation is imported only when the session itself records the
 directory it ran in — never inferred from a file or folder name. Claude Code writes that directory
 on its entries, Codex in its `session_meta` header and DeepSeek Harness in its session-log header,
-and pi and Prime Agent in their session header, so all five can be attributed exactly, including
+pi and Prime Agent in their session header, and jcode in each session's `working_dir`, so all six
+can be attributed exactly, including
 sessions started in a subdirectory of the repo. Guessing was tempting (Claude names its history
 folders after the project path) but unsafe: `/` and `.` both encode to `-`, so `repo-sub` is either
 the subdirectory `repo/sub` or an unrelated sibling repo — and a wrong guess files someone else's
