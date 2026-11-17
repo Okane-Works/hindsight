@@ -1,0 +1,305 @@
+{
+ "id": "session_eagle_1794927464955_439e5d418915c243",
+ "parent_id": null,
+ "title": "How can I use self-dev mode? How is it intended to be used?",
+ "created_at": "2026-11-17T14:57:44.955785Z",
+ "updated_at": "2026-11-17T15:02:22.055671Z",
+ "messages": [
+  {
+   "id": "message_1794927464969_16468767175596412034",
+   "role": "user",
+   "content": [
+    {
+     "type": "text",
+     "text": "<system-reminder>\n# Session Context\nDate: 2026-11-17\nTime: 09:57:44\nTimezone: -05:00\nOS: macos\nArchitecture: aarch64\nJcode version: v1.0.0 (32b28045a) (32b28045a)\nWorking directory: /Users/me/repos/acme\n</system-reminder>"
+    }
+   ],
+   "display_role": "system",
+   "timestamp": "2026-11-17T14:57:44.969429Z"
+  },
+  {
+   "id": "message_1794927525589_7086461200253818326",
+   "role": "user",
+   "content": [
+    {
+     "type": "text",
+     "text": "How can I use self-dev mode? How is it intended to be used?"
+    }
+   ],
+   "timestamp": "2026-11-17T14:58:45.589418Z"
+  },
+  {
+   "id": "message_1794927531331_9536177627331384962",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "reasoning_trace",
+     "text": "I'm checking whether \"self-dev mode\" refers to something in the jcode or acme repo, so I'll search the codebase for it.\n\n"
+    },
+    {
+     "type": "tool_use",
+     "id": "toolu_01Cqv7fMMeUYLkdb1rcERayf",
+     "name": "agentgrep",
+     "input": {
+      "intent": "Find self-dev mode references",
+      "max_regions": 30,
+      "query": "self-dev"
+     }
+    },
+    {
+     "type": "tool_use",
+     "id": "toolu_01DBSrWeDt73afy4Q1wdrV7j",
+     "name": "agentgrep",
+     "input": {
+      "intent": "Find self_dev references",
+      "max_regions": 30,
+      "query": "self_dev"
+     }
+    }
+   ],
+   "timestamp": "2026-11-17T14:58:51.331048Z"
+  },
+  {
+   "id": "message_1794927531440_17743503429154134786",
+   "role": "user",
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_01Cqv7fMMeUYLkdb1rcERayf",
+     "content": "query: self-dev\nmatches: 0 in 0 files"
+    }
+   ],
+   "timestamp": "2026-11-17T14:58:51.440582Z",
+   "tool_duration_ms": 99
+  },
+  {
+   "id": "message_1794927531489_4273522238947979237",
+   "role": "user",
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_01DBSrWeDt73afy4Q1wdrV7j",
+     "content": "query: self_dev\nmatches: 0 in 0 files"
+    }
+   ],
+   "timestamp": "2026-11-17T14:58:51.489095Z",
+   "tool_duration_ms": 48
+  },
+  {
+   "id": "message_1794927535630_5928083520678884113",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "reasoning_trace",
+     "text": "This isn't in the acme repo, so self-dev mode most likely means jcode itself. I'll load the jcode_docs tool.\n\n"
+    },
+    {
+     "type": "tool_use",
+     "id": "toolu_014sAopHvW1BjL4hduXj8iY4",
+     "name": "load_tools",
+     "input": {
+      "intent": "Look up self-dev mode in jcode docs",
+      "names": [
+       "jcode_docs"
+      ]
+     }
+    }
+   ],
+   "timestamp": "2026-11-17T14:58:55.630580Z"
+  },
+  {
+   "id": "message_1794927535633_7117725449821864133",
+   "role": "user",
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_014sAopHvW1BjL4hduXj8iY4",
+     "content": "Loaded: jcode_docs. Call them directly now."
+    },
+    {
+     "type": "tool_reference",
+     "tool_use_id": "toolu_014sAopHvW1BjL4hduXj8iY4",
+     "tool_name": "jcode_docs"
+    }
+   ],
+   "timestamp": "2026-11-17T14:58:55.634Z",
+   "tool_duration_ms": 0
+  },
+  {
+   "id": "message_1794927538090_11299672731898926495",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_01RdBK4fkjKXgXz6ESxD2AP2",
+     "name": "jcode_docs",
+     "input": {
+      "action": "search",
+      "intent": "Find docs on self-dev mode",
+      "query": "self-dev mode"
+     }
+    }
+   ],
+   "timestamp": "2026-11-17T14:58:58.090823Z"
+  },
+  {
+   "id": "message_1794927538101_18385324994196011055",
+   "role": "user",
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_01RdBK4fkjKXgXz6ESxD2AP2",
+     "content": "Jcode docs results for \"self-dev mode\" (bundled with this Jcode build):\n\n1. `docs/SERVER_ARCHITECTURE.md` > Self-Dev Mode\n1. Auto-detects the repo and enables s… (trimmed for fixture)"
+    }
+   ],
+   "timestamp": "2026-11-17T14:58:58.101923Z",
+   "tool_duration_ms": 8
+  },
+  {
+   "id": "message_1794927543811_5858106537891336760",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_016vXDZb7X4mLjDGxC19YZKB",
+     "name": "jcode_docs",
+     "input": {
+      "action": "read",
+      "intent": "Read self-dev section of server architecture doc",
+      "path": "docs/SERVER_ARCHITECTURE.md"
+     }
+    },
+    {
+     "type": "tool_use",
+     "id": "toolu_01WTj9V7u3acvZQ113qhERBF",
+     "name": "jcode_docs",
+     "input": {
+      "action": "search",
+      "intent": "More self-dev docs",
+      "query": "selfdev self-development reload canary"
+     }
+    }
+   ],
+   "timestamp": "2026-11-17T14:59:03.811419Z"
+  },
+  {
+   "id": "message_1794927543835_12615745605040910889",
+   "role": "user",
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_016vXDZb7X4mLjDGxC19YZKB",
+     "content": "Source: `docs/SERVER_ARCHITECTURE.md` (bundled with this Jcode build)\n\n# Server Architecture\n\nSee also:\n\n- [`SERVER_SERVICE_SPLIT_PLAN.md`](./plans/SERVER_SERVI… (trimmed for fixture)"
+    }
+   ],
+   "timestamp": "2026-11-17T14:59:03.835148Z",
+   "tool_duration_ms": 0
+  },
+  {
+   "id": "message_1794927543837_4343431560382663091",
+   "role": "user",
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_01WTj9V7u3acvZQ113qhERBF",
+     "content": "Jcode docs results for \"selfdev self-development reload canary\" (bundled with this Jcode build):\n\n1. `docs/ssh-slash-commands.md` > Capability matrix\n| Register… (trimmed for fixture)"
+    }
+   ],
+   "timestamp": "2026-11-17T14:59:03.837200Z",
+   "tool_duration_ms": 2
+  },
+  {
+   "id": "message_1794927548819_1476559815230229161",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "reasoning_trace",
+     "text": "I'm looking at jcode's self-dev mode, and I want to check the README's Customizability and Self-Dev section to see how it's meant to be used. I'll also look at the \"Verifying a change at runtime\" part of AGENTS.md.\n\n"
+    },
+    {
+     "type": "tool_use",
+     "id": "toolu_01E43Eb71Do1VeyoeTrpZc3g",
+     "name": "jcode_docs",
+     "input": {
+      "action": "read",
+      "intent": "Read README self-dev section",
+      "path": "README.md"
+     }
+    }
+   ],
+   "timestamp": "2026-11-17T14:59:08.819765Z"
+  },
+  {
+   "id": "message_1794927548823_9315164997446263666",
+   "role": "user",
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_01E43Eb71Do1VeyoeTrpZc3g",
+     "content": "Source: `README.md` (bundled with this Jcode build)\n\n<div align=\"center\">\n\n<p>\n<a href=\"https://trendshift.io/repositories/25042?utm_source=repository-badge&amp… (trimmed for fixture)"
+    }
+   ],
+   "timestamp": "2026-11-17T14:59:08.823042Z",
+   "tool_duration_ms": 0
+  },
+  {
+   "id": "message_1794927554160_17181567371122627552",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "reasoning_trace",
+     "text": "I'm looking into how self-dev mode works, so I'll check AGENTS.md in the jcode repo and the bundled docs for details on the selfdev tooling, including the usage instructions for entering it.\n\n"
+    },
+    {
+     "type": "tool_use",
+     "id": "toolu_01T3WYzyBrEcsFGw74aeipd4",
+     "name": "jcode_docs",
+     "input": {
+      "action": "search",
+      "intent": "Find self-dev usage instructions",
+      "limit": 8,
+      "query": "enter self dev mode build reload binary verify change at runtime"
+     }
+    }
+   ],
+   "timestamp": "2026-11-17T14:59:14.160316Z"
+  },
+  {
+   "id": "message_1794927554183_7935647667690848233",
+   "role": "user",
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_01T3WYzyBrEcsFGw74aeipd4",
+     "content": "Jcode docs results for \"enter self dev mode build reload binary verify change at runtime\" (bundled with this Jcode build):\n\n1. `docs/ssh-slash-commands.md` > Ca… (trimmed for fixture)"
+    }
+   ],
+   "timestamp": "2026-11-17T14:59:14.183873Z",
+   "tool_duration_ms": 20
+  },
+  {
+   "id": "message_1794927567970_6197348476217903314",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "Self-dev mode is jcode's mechanism for modifying its own source code. Here's how it works and how it's meant to be used:\n\n## How to use it\n\n1. **Clone the jcode repo** (<https://github.com/1jehuang/jcode>) and run `jcode` from inside it. When running `jcode` inside the jcode repository, it auto-detects the repo and enables self-dev mode. There's no flag to pass, the detection is automatic.\n2. **Just tell the agent what to change.** Tell your jcode agent to enter self dev mode, and it will start modifying its own source code. Jcode is optimized to iterate on itself.\n\n## What happens under the hood\n\nWhen a session starts in the jcode repo, it connects to the normal shared jcode server, marks that session as canary/self-dev via subscribe metadata, enables selfdev prompt/tooling only for that session, and `/reload` still hot-reloads the shared server so clients reconnect.\n\nThe reload flow: the client sends a Reload request, the server execs into the new binary with serve args, the new server process starts on the same socket, all clients auto-reconnect, and the initiating client also re-execs if its binary is outdated.\n\n## Intended usage pattern\n\nThe design intent is full-loop autonomy: there is significant infrastructure around self development, which allows it to edit, build, and test its own source code, then reload its own binary and continue work in your (potentially many) sessions, fully automatically.\n\nTwo practices the docs emphasize:\n\n- **Verify at runtime, not just at build time.** A successful build alone is not runtime validation. When testing a rebuilt server, use an isolated socket or the coordinated self-dev reload path so the long-lived daemon is actually running the changed binary.\n- **Don't disrupt an in-use daemon.** For safe verification, build with the selfdev profile and run the resulting binary against its own socket rather than restarting an in-use shared daemon; a production activation must use the established safe build/reload workflow. You can isolate with `jcode --socket /tmp/test.sock` style launches so your other sessions keep running on the stable binary.\n\n**TL;DR:** `cd` into a jcode checkout, launch `jcode`, and ask it to make the change you want. It edits, builds, tests, then `/reload`s the shared server in place while your sessions reconnect automatically."
+    },
+    {
+     "type": "reasoning_trace",
+     "text": "I've got a solid picture now, so I'll summarize for the user. I could also check the \"Verifying a change at runtime\" section in AGENTS.md, since the docs point to it. But this session is in the acme repo rather than jcode, so I'll focus on how self-dev mode works, answering concisely from the docs.\n\n"
+    }
+   ],
+   "timestamp": "2026-11-17T14:59:27.970618Z"
+  }
+ ],
+ "model": "claude-fable-5",
+ "reasoning_effort": "high",
+ "is_canary": false,
+ "working_dir": "/Users/me/repos/acme",
+ "short_name": "eagle",
+ "status": "Closed",
+ "is_debug": false,
+ "saved": false,
+ "compaction": null
+}
