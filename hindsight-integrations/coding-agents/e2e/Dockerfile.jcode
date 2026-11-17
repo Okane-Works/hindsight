@@ -1,0 +1,15 @@
+FROM hindsight-coding-agents-e2e-base
+ARG VERSION=latest
+# jcode ships as a self-contained binary from its own installer, not as an npm package. The script
+# puts the launcher in /root/.local/bin, which the base image already has on PATH, and takes a
+# release tag from JCODE_VERSION (empty selects the latest release).
+RUN if [ "${VERSION}" = "latest" ]; then \
+        curl -fsSL https://jcode.sh/install | JCODE_NO_TELEMETRY=1 bash; \
+    else \
+        curl -fsSL https://jcode.sh/install | JCODE_NO_TELEMETRY=1 JCODE_VERSION="${VERSION}" bash; \
+    fi \
+    && command -v jcode
+# The model route: jcode refuses a plain-http base URL whose host is a DNS name, so the stub's
+# address has to be resolved at run time. See the script's own header.
+COPY jcode-e2e-exec.sh /usr/local/bin/hindsight-jcode-e2e-exec
+RUN chmod 755 /usr/local/bin/hindsight-jcode-e2e-exec
